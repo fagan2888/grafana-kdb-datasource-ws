@@ -6,10 +6,10 @@ import {QueryCtrl} from 'app/plugins/sdk';
 import {SqlPart} from './sql_part/sql_part';
 import KDBQuery from './kdb_query';
 import sqlPart from './sql_part';
-import { defaultRowCountLimit } from './model/kdb-request-config';
+import { defaultRowCountLimit, durationMap } from './model/kdb-request-config';
 //Declaring default constants
-const conflationUnitDefault: string = 'm';
-const conflationDurationDefault: string = "5";
+export const conflationUnitDefault: string = 'm';
+export const conflationDurationDefault: string = "5";
 
 export interface QueryMeta {
     sql: string;
@@ -70,7 +70,8 @@ export class KDBQueryCtrl extends QueryCtrl {
             this.datasource.connectWS();
         };
 
-        //this.target = this.target;98
+        console.log('pct',this.panelCtrl)
+        this.templateSrv = templateSrv;
         this.queryModel = new KDBQuery(this.target, templateSrv, this.panel.scopedVars);
         this.metaBuilder = new KDBMetaQuery(this.target, this.queryModel);
         this.updateProjection();
@@ -114,11 +115,15 @@ export class KDBQueryCtrl extends QueryCtrl {
 
         this.durationUnits = [
             //NOTE: The text -> value conversion here doesnt work; segment.value is still the 'text' value.
+            {text: 'Miliseconds', value: 'ms'},
             {text: 'Seconds', value: 's'},
             {text: 'Minutes', value: 'm'},
             {text: 'Hours', value: 'h'}];
             
         this.target.version = this.datasource.meta.info.version;
+
+        //Initialise query as blank
+        this.target.blankQuery = true;
 
         //If queryError isn't present, build it
         if(!this.target.queryError) {
@@ -133,7 +138,7 @@ export class KDBQueryCtrl extends QueryCtrl {
         if(!this.target.useConflation){
             this.target.conflationUnit = conflationUnitDefault;
             this.target.conflationDuration = conflationDurationDefault;
-            this.target.conflationDurationMS = Number(conflationDurationDefault) * (conflationUnitDefault == 'Seconds' ? Math.pow(10,9) : (conflationUnitDefault == 'Minutes' ? 60 * Math.pow(10,9) : 3600 * Math.pow(10,9)));
+            this.target.conflationDurationMS = Number(conflationDurationDefault) * durationMap[conflationUnitDefault];
         }
         if(!this.target.kdbSideFunction){
             this.target.kdbSideFunction = 'Select Function'
@@ -147,6 +152,7 @@ export class KDBQueryCtrl extends QueryCtrl {
         this.panelCtrl.events.on('data-received', this.onDataReceived.bind(this), $scope);
         this.panelCtrl.events.on('data-error', this.onDataError.bind(this), $scope);
     
+        
 
         if(this.target.queryType == 'selectQuery') {
             this.buildQueryBuilderPanel();
@@ -155,6 +161,7 @@ export class KDBQueryCtrl extends QueryCtrl {
         } else this.buildQueryBuilderPanel();
     }
 
+   
 
     buildFunctionQueryPanel() {
         if(!this.target.kdbFunction || this.target.kdbFunction == 'Enter function') {
@@ -168,6 +175,7 @@ export class KDBQueryCtrl extends QueryCtrl {
     //This function builds the datasource if the panel type is a graph
     buildQueryBuilderPanel() {
         //default to query builder
+        console.log('tgt',this.target)
         this.metricColumnSegment = this.uiSegmentSrv.newSegment('dummy');
 
         if(!this.target.timeColumn || this.target.timeColumn == 'Select Field'){
@@ -267,6 +275,9 @@ export class KDBQueryCtrl extends QueryCtrl {
             this.buildQueryBuilderPanel();
             this.target.queryError.error[3] = false;
         } else if(this.target.queryType == 'functionQuery'){
+            if(this.target.kdbFunction !== ""){
+                this.target.blankQuery = false
+            }
             this.buildFunctionQueryPanel();
             this.functionChanged();
         } else this.buildQueryBuilderPanel();
@@ -293,6 +304,7 @@ export class KDBQueryCtrl extends QueryCtrl {
         this.groupingSegment.value = segment.value;
         this.target.groupingField = segment.value;
         this.target.useGrouping = false;
+        this.target.table && this.target.queryType === 'selectQuery' ? this.target.blankQuery = false : this.target.blankQuery = true;
 
         this.updateProjection();
         this.panelCtrl.refresh();
@@ -321,32 +333,30 @@ export class KDBQueryCtrl extends QueryCtrl {
     conflationSettingsChanged() {
         //Conflation errors are reported in queryError at index 1
         this.target.queryError.error[1] = false;
-
         if (isNaN(this.conflationDurationSegment.value)) {
+            //Test if its a variable
+            let instVariables = this.templateSrv.getVariables();
+            let namedVars: string[] = [];
+            for(var i = 0; i < instVariables.length; i++) {
+                namedVars = namedVars.concat('$' + instVariables[i].name);
+            }
+            namedVars = namedVars.concat(['$__interval', '$__interval_ms'])
+            //If it is a variable, set target.conflationDuration to it
+            if(namedVars.indexOf(this.conflationDurationSegment.value) !== -1) {
+                this.target.conflationDuration = this.conflationDurationSegment.value;
+            } else {
+            // Otherwise error
             this.target.queryError.error[1] = true
             this.target.queryError.message[1] = 'Conflation duration must be a number.'
+            };
         } else this.target.conflationDuration = this.conflationDurationSegment.value;
-        if(this.target.conflationUnit == 's') {
-            this.target.conflationDurationMS = this.target.conflationDuration * Math.pow(10,9);
-        }
-        else if(this.target.conflationUnit == 'm') {
-            this.target.conflationDurationMS = this.target.conflationDuration * 60 * Math.pow(10,9);
-        }
-        else if(this.target.conflationUnit == 'h') {
-            this.target.conflationDurationMS = this.target.conflationDuration * 3600 * Math.pow(10,9);
-        }
-        else {
-            this.target.queryError.error[1] = true;
-            this.target.queryError.message[1] = 'Unhandled exception in conflation. Please post conflation settings on our GitHub page.'
-        };
+
         if (this.target.useConflation === false) {
-            console.log(this.selectParts[0][1]);
             this.selectParts.map(partGroup => {
                 for (let i=0;i<partGroup.length;i++) {
                     if(partGroup[i].part.type == "aggregate") partGroup.splice(i,1)
                 }
             })
-            console.log(this.selectParts[0][1]);
         };
         this.updatePersistedParts();
         this.panelCtrl.refresh();
@@ -354,11 +364,24 @@ export class KDBQueryCtrl extends QueryCtrl {
 
     rowCountLimitChanged() {
         //Row count limit errors are reported in queryError at index 2
-
         if (isNaN(this.rowCountLimitSegment.value)) {
-            this.target.rowCountLimit = defaultRowCountLimit;
-            this.target.queryError.error[2] = true;
-            this.target.queryError.message[2] = 'Row count must be a positive integer.';
+            //Test if its a variable
+            let instVariables = this.templateSrv.getVariables();
+            let namedVars: string[] = [];
+            for(var i = 0; i < instVariables.length; i++) {
+                namedVars = namedVars.concat('$' + instVariables[i].name);
+            }
+            //If it is a variable, set target.rowCountLimit to it
+            if(namedVars.indexOf(this.rowCountLimitSegment.value) !== -1) {
+                this.target.rowCountLimit = this.rowCountLimitSegment.value;
+                this.target.queryError.error[2] = false;
+                return this.panelCtrl.refresh();
+            // Otherwise error
+            } else {
+                this.target.rowCountLimit = defaultRowCountLimit;
+                this.target.queryError.error[2] = true;
+                this.target.queryError.message[2] = 'Row count must be a positive integer.';
+            };    
         } else {
             let numberRowCountLimit = Number(this.rowCountLimitSegment.value);
             if (Number.isInteger(numberRowCountLimit) && numberRowCountLimit > 0) {
@@ -401,8 +424,15 @@ export class KDBQueryCtrl extends QueryCtrl {
     }
 
     onDataReceived(dataList) {
+        if(dataList.length == 0){
+            console.log('y')
+            return}
+        console.log('dataList',dataList)
         this.lastQueryMeta = null;   
         const anySeriesFromQuery = _.find(dataList, {refId: this.target.refId});
+        if(!anySeriesFromQuery) {
+            return
+        }
        if(anySeriesFromQuery.meta.errorReceived){
            this.target.errorFound = true;
            this.target.lastQueryError = anySeriesFromQuery.meta.errorMessage;
@@ -410,8 +440,8 @@ export class KDBQueryCtrl extends QueryCtrl {
            this.target.errorFound = false;
            this.target.lastQueryError = '';
        }
-        
     }
+    
 
     onDataError(err) {
         if (err.data && err.data.results) {

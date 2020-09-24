@@ -8,6 +8,8 @@ export default class ResponseParser {
     }
 
     processQueryResult(res, req) {
+        console.log('res', res)
+        console.log('req', req)
         let data = {};
         if (!res) return data;
         //KDB+ Error Handling
